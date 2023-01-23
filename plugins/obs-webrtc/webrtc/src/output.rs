@@ -3,7 +3,9 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use log::{debug, error, info, trace};
 use reqwest::Url;
+use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
 use std::boxed::Box;
+
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -13,7 +15,7 @@ use tokio::time::interval;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::api::setting_engine::SettingEngine;
-use webrtc::api::APIBuilder;
+use webrtc::api::{APIBuilder, API};
 use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::interceptor::registry::Registry;
 use webrtc::media::Sample;
@@ -73,9 +75,10 @@ struct OutputStreamStats {
 }
 
 pub struct OutputStream {
+    api: Arc<API>,
     video_track: Arc<TrackLocalStaticSample>,
     audio_track: Arc<TrackLocalStaticSample>,
-    peer_connection: Arc<RTCPeerConnection>,
+    peer_connection: Arc<tokio::sync::Mutex<RTCPeerConnection>>,
     stats: Arc<RwLock<OutputStreamStats>>,
     worker_tx: UnboundedSender<Message>,
     worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -112,7 +115,7 @@ impl OutputStream {
                                                 duration: packet.duration,
                                                 ..Default::default()
                                             };
-                                            match (packet.typ, peer_connection.connection_state()) {
+                                            match (packet.typ, peer_connection.lock().await.connection_state()) {
                                                 (_, RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed) => Err(WorkerResult::Error(OutputStreamError::NetworkError)),
                                                 (EncodedPacketType::Audio, _) => audio_track.write_sample(&sample).await.map_err(|e| WorkerResult::Error(OutputStreamError::WriteError(e))),
                                                 (EncodedPacketType::Video, _) => video_track.write_sample(&sample).await.map_err(|e| WorkerResult::Error(OutputStreamError::WriteError(e)))
@@ -123,7 +126,7 @@ impl OutputStream {
                                     }
                                 }
                                 _ = interval.tick() => {
-                                    let pc_stats = peer_connection.get_stats().await;
+                                    let pc_stats = peer_connection.lock().await.get_stats().await;
 
                                     let stats = &mut stats.write().unwrap();
                                     if let Some(StatsReportType::Transport(transport_stats)) = pc_stats.reports.get("ice_transport") {
@@ -266,18 +269,18 @@ impl OutputStream {
             }));
         }
 
-        let api = APIBuilder::new()
+        let api = Arc::new(APIBuilder::new()
             .with_media_engine(m)
             .with_interceptor_registry(registry)
             .with_setting_engine(setting_engine)
-            .build();
+            .build());
 
         // Prepare the configuration
         let config = RTCConfiguration {
             ..Default::default()
         };
 
-        let peer_connection = Arc::new(api.new_peer_connection(config).await?);
+        let peer_connection = Arc::new(tokio::sync::Mutex::new(api.new_peer_connection(config).await?));
         let stats: Arc<RwLock<OutputStreamStats>> = Arc::new(RwLock::new(OutputStreamStats {
             connect_time: None,
             ..Default::default()
@@ -288,6 +291,7 @@ impl OutputStream {
         let error_callback: Arc<Mutex<Option<ErrorCallback>>> = Arc::new(Mutex::new(None));
 
         let mut output_stream = Self {
+            api,
             audio_track,
             video_track,
             peer_connection,
@@ -303,7 +307,7 @@ impl OutputStream {
         Ok(output_stream)
     }
 
-    pub async fn connect(&self, url: &str, bearer_token: Option<&str>) {
+    pub async fn connect(&self, url: &str, bearer_token: Option<String>) {
         self.connect_internal(url, bearer_token)
             .await
             .unwrap_or_else(|e| {
@@ -314,11 +318,27 @@ impl OutputStream {
             })
     }
 
-    async fn connect_internal(&self, url: &str, bearer_token: Option<&str>) -> Result<()> {
+    async fn connect_internal(&self, url: &str, bearer_token: Option<String>) -> Result<()> {
         println!("Setting up webrtc!");
 
-        self.peer_connection
-            .add_transceiver_from_track(
+        let (ice_servers, url) = whip::get_ice_credentials(url, bearer_token.clone()).await?;
+
+        // Prepare the configuration
+        let config = RTCConfiguration {
+            ice_servers,
+            ice_transport_policy: RTCIceTransportPolicy::All,
+            ..Default::default()
+        };
+
+        // Setup using the peer connection that has the correct turn servers
+        let peer_connection = self.api.new_peer_connection(config).await?;
+        {
+            let mut pc = self.peer_connection.lock().await;
+            *pc = peer_connection;
+        }
+
+        self.peer_connection.
+            lock().await.add_transceiver_from_track(
                 self.video_track.clone(),
                 &[RTCRtpTransceiverInit {
                     direction: RTCRtpTransceiverDirection::Sendonly,
@@ -327,8 +347,8 @@ impl OutputStream {
             )
             .await?;
 
-        self.peer_connection
-            .add_transceiver_from_track(
+        self.peer_connection.
+            lock().await.add_transceiver_from_track(
                 self.audio_track.clone(),
                 &[RTCRtpTransceiverInit {
                     direction: RTCRtpTransceiverDirection::Sendonly,
@@ -338,7 +358,7 @@ impl OutputStream {
             .await?;
 
         self.peer_connection
-            .on_ice_connection_state_change(Box::new(
+            .lock().await.on_ice_connection_state_change(Box::new(
                 move |connection_state: RTCIceConnectionState| {
                     info!("Connection State has changed {}", connection_state);
                     if connection_state == RTCIceConnectionState::Connected {
@@ -349,7 +369,7 @@ impl OutputStream {
             ));
 
         self.peer_connection
-            .on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
+            .lock().await.on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
                 debug!("Peer Connection State has changed: {}", s);
 
                 if s == RTCPeerConnectionState::Failed {
@@ -359,20 +379,21 @@ impl OutputStream {
                 Box::pin(async {})
             }));
 
-        let offer = self.peer_connection.create_offer(None).await?;
-        let mut gather_complete = self.peer_connection.gathering_complete_promise().await;
-        self.peer_connection.set_local_description(offer).await?;
+        let offer = self.peer_connection.lock().await.create_offer(None).await?;
+        let mut gather_complete = self.peer_connection.lock().await.gathering_complete_promise().await;
+        self.peer_connection.lock().await.set_local_description(offer).await?;
 
         // Block until gathering complete
         let _ = gather_complete.recv().await;
 
         let offer = self
             .peer_connection
+            .lock().await
             .local_description()
             .await
             .ok_or_else(|| anyhow!("No local description available"))?;
-        let (answer, whip_resource) = whip::offer(url, bearer_token, offer).await?;
-        self.peer_connection.set_remote_description(answer).await?;
+        let (answer, whip_resource) = whip::offer(&url, bearer_token, offer).await?;
+        self.peer_connection.lock().await.set_remote_description(answer).await?;
 
         *self.whip_resource.lock().unwrap() = Some(whip_resource);
 
@@ -398,7 +419,7 @@ impl OutputStream {
         if let Some(whip_resource) = whip_resource {
             whip::delete(&whip_resource).await?;
         }
-        Ok(self.peer_connection.close().await?)
+        Ok(self.peer_connection.lock().await.close().await?)
     }
 
     pub fn bytes_sent(&self) -> u64 {

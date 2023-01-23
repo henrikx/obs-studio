@@ -118,7 +118,7 @@ pub unsafe extern "C" fn obs_webrtc_whip_output_connect(
     };
 
     output.runtime.spawn(async move {
-        output.stream.connect(&url, bearer_token.as_deref()).await;
+        output.stream.connect(&url, bearer_token).await;
     });
 }
 
