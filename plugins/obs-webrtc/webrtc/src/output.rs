@@ -4,6 +4,7 @@ use bytes::Bytes;
 use log::{debug, error, info, trace};
 use reqwest::Url;
 use std::boxed::Box;
+use webrtc::dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -259,6 +260,10 @@ impl OutputStream {
             .collect();
 
         let mut setting_engine = SettingEngine::default();
+        setting_engine.set_srtp_protection_profiles(vec![
+            SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80,
+            SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_32,
+        ]);
 
         // Only attempt to limit if we found valid interfaces, otherwise do not attempt
         // to limit as we may be on a platform that doesn't expose enough information
