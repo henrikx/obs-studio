@@ -3,8 +3,8 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use log::{debug, error, info, trace};
 use reqwest::Url;
-use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
 use std::boxed::Box;
+use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
 
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
@@ -269,18 +269,22 @@ impl OutputStream {
             }));
         }
 
-        let api = Arc::new(APIBuilder::new()
-            .with_media_engine(m)
-            .with_interceptor_registry(registry)
-            .with_setting_engine(setting_engine)
-            .build());
+        let api = Arc::new(
+            APIBuilder::new()
+                .with_media_engine(m)
+                .with_interceptor_registry(registry)
+                .with_setting_engine(setting_engine)
+                .build(),
+        );
 
         // Prepare the configuration
         let config = RTCConfiguration {
             ..Default::default()
         };
 
-        let peer_connection = Arc::new(tokio::sync::Mutex::new(api.new_peer_connection(config).await?));
+        let peer_connection = Arc::new(tokio::sync::Mutex::new(
+            api.new_peer_connection(config).await?,
+        ));
         let stats: Arc<RwLock<OutputStreamStats>> = Arc::new(RwLock::new(OutputStreamStats {
             connect_time: None,
             ..Default::default()
@@ -326,7 +330,7 @@ impl OutputStream {
         // Prepare the configuration
         let config = RTCConfiguration {
             ice_servers,
-            ice_transport_policy: RTCIceTransportPolicy::All,
+            ice_transport_policy: RTCIceTransportPolicy::Relay,
             ..Default::default()
         };
 
@@ -337,8 +341,10 @@ impl OutputStream {
             *pc = peer_connection;
         }
 
-        self.peer_connection.
-            lock().await.add_transceiver_from_track(
+        self.peer_connection
+            .lock()
+            .await
+            .add_transceiver_from_track(
                 self.video_track.clone(),
                 &[RTCRtpTransceiverInit {
                     direction: RTCRtpTransceiverDirection::Sendonly,
@@ -347,8 +353,10 @@ impl OutputStream {
             )
             .await?;
 
-        self.peer_connection.
-            lock().await.add_transceiver_from_track(
+        self.peer_connection
+            .lock()
+            .await
+            .add_transceiver_from_track(
                 self.audio_track.clone(),
                 &[RTCRtpTransceiverInit {
                     direction: RTCRtpTransceiverDirection::Sendonly,
@@ -358,7 +366,9 @@ impl OutputStream {
             .await?;
 
         self.peer_connection
-            .lock().await.on_ice_connection_state_change(Box::new(
+            .lock()
+            .await
+            .on_ice_connection_state_change(Box::new(
                 move |connection_state: RTCIceConnectionState| {
                     info!("Connection State has changed {}", connection_state);
                     if connection_state == RTCIceConnectionState::Connected {
@@ -369,7 +379,9 @@ impl OutputStream {
             ));
 
         self.peer_connection
-            .lock().await.on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
+            .lock()
+            .await
+            .on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
                 debug!("Peer Connection State has changed: {}", s);
 
                 if s == RTCPeerConnectionState::Failed {
@@ -380,20 +392,34 @@ impl OutputStream {
             }));
 
         let offer = self.peer_connection.lock().await.create_offer(None).await?;
-        let mut gather_complete = self.peer_connection.lock().await.gathering_complete_promise().await;
-        self.peer_connection.lock().await.set_local_description(offer).await?;
+        let mut gather_complete = self
+            .peer_connection
+            .lock()
+            .await
+            .gathering_complete_promise()
+            .await;
+        self.peer_connection
+            .lock()
+            .await
+            .set_local_description(offer)
+            .await?;
 
         // Block until gathering complete
         let _ = gather_complete.recv().await;
 
         let offer = self
             .peer_connection
-            .lock().await
+            .lock()
+            .await
             .local_description()
             .await
             .ok_or_else(|| anyhow!("No local description available"))?;
         let (answer, whip_resource) = whip::offer(&url, bearer_token, offer).await?;
-        self.peer_connection.lock().await.set_remote_description(answer).await?;
+        self.peer_connection
+            .lock()
+            .await
+            .set_remote_description(answer)
+            .await?;
 
         *self.whip_resource.lock().unwrap() = Some(whip_resource);
 

@@ -68,7 +68,7 @@ impl IceLink {
 }
 
 pub async fn get_ice_credentials(
-    participant_id: &str,
+    url: &str,
     bearer_token: Option<String>,
 ) -> Result<(Vec<webrtc::ice_transport::ice_server::RTCIceServer>, String)> {
     let mut headers = reqwest::header::HeaderMap::new();
@@ -76,8 +76,6 @@ pub async fn get_ice_credentials(
         let authoriation_value = HeaderValue::from_str(&format!("Bearer {bearer_token}"))?;
         headers.append(AUTHORIZATION, authoriation_value.clone());
     }
-
-    let url = format!("https://miab.siobud.com/dataplane/publish/{participant_id}");
 
     // Handle redirects manually because auth header will be dropped
     let client = reqwest::Client::builder()
