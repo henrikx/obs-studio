@@ -72,7 +72,7 @@ UIValidation::StreamSettingsConfirmation(QWidget *parent, OBSService service)
 	bool hasStreamKey = ((streamKey != NULL && streamKey[0] != '\0') ||
 			     isCustomUrlService);
 
-	if (hasStreamUrl && hasStreamKey)
+	if ((isCustomUrlService && hasStreamKey) || (hasStreamUrl && hasStreamKey))
 		return StreamSettingsAction::ContinueStream;
 
 	QString msg;

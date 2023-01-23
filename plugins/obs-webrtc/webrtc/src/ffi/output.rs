@@ -105,20 +105,33 @@ pub unsafe extern "C" fn obs_webrtc_whip_output_connect(
     url: *const c_char,
     bearer_token: *const c_char,
 ) {
-    let url = std::ffi::CStr::from_ptr(url).to_str().unwrap().to_owned();
+    let url = if !url.is_null() {
+        let url = std::ffi::CStr::from_ptr(url).to_str().unwrap().to_owned();
+        if !url.is_empty() {
+            Some(url)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let bearer_token = if !bearer_token.is_null() {
-        Some(
-            std::ffi::CStr::from_ptr(bearer_token)
-                .to_str()
-                .unwrap()
-                .to_owned(),
-        )
+        let bearer_token = std::ffi::CStr::from_ptr(bearer_token)
+            .to_str()
+            .unwrap()
+            .to_owned();
+        if !bearer_token.is_empty() {
+            Some(bearer_token)
+        } else {
+            None
+        }
     } else {
         None
     };
 
     output.runtime.spawn(async move {
-        output.stream.connect(&url, bearer_token).await;
+        output.stream.connect(url, bearer_token).await;
     });
 }
 

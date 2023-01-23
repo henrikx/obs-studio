@@ -1,8 +1,10 @@
 use crate::whip;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use bytes::Bytes;
+use jwt::FromBase64;
 use log::{debug, error, info, trace};
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use std::boxed::Box;
 use webrtc::dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
@@ -316,7 +318,7 @@ impl OutputStream {
         Ok(output_stream)
     }
 
-    pub async fn connect(&self, url: &str, bearer_token: Option<String>) {
+    pub async fn connect(&self, url: Option<String>, bearer_token: Option<String>) {
         self.connect_internal(url, bearer_token)
             .await
             .unwrap_or_else(|e| {
@@ -327,10 +329,40 @@ impl OutputStream {
             })
     }
 
-    async fn connect_internal(&self, url: &str, bearer_token: Option<String>) -> Result<()> {
+    async fn connect_internal(
+        &self,
+        url: Option<String>,
+        bearer_token: Option<String>,
+    ) -> Result<()> {
         println!("Setting up webrtc!");
 
-        let (ice_servers, url) = whip::get_ice_credentials(url, bearer_token.clone()).await?;
+        if url.is_none() && bearer_token.is_none() {
+            bail!("Missing url and bearer token, must specify at least one");
+        }
+
+        info!("URL: {:?}", url);
+        let (url, bearer_token) = if let Some(url) = url {
+            (url, bearer_token)
+        } else {
+            let bearer_token = bearer_token.unwrap();
+            #[derive(Debug, Serialize, Deserialize)]
+            struct WhipClaims {
+                whip_url: String,
+                jti: String,
+            };
+
+            let mut bt = bearer_token.split(".");
+            // header
+            _ = bt.next();
+            let claims = bt.next().ok_or_else(|| anyhow!("Missing claims in jwt"))?;
+            let claims: WhipClaims = FromBase64::from_base64(claims)?;
+            (
+                format!("{}/publish/{}", claims.whip_url, claims.jti),
+                Some(bearer_token),
+            )
+        };
+
+        let (ice_servers, url) = whip::get_ice_credentials(&url, bearer_token.clone()).await?;
 
         // Prepare the configuration
         let config = RTCConfiguration {
