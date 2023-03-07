@@ -45,6 +45,22 @@
   ],
   "modules": [
     {
+      "name": "libdatachannel",
+      "buildsystem": "cmake-ninja",
+      "config-opts": [
+        "-DNO_EXAMPLES=ON",
+        "-DNO_TESTS=ON"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/paullouisageneau/libdatachannel.git",
+          "tag": "v0.18.2",
+          "commit": "4df86b6ccbb348731ad4ba1e9045944cc77498bc"
+        }
+      ]
+    },
+    {
       "name": "x264",
       "config-opts": [
         "--disable-cli",
