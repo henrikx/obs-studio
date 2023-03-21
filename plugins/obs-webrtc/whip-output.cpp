@@ -228,14 +228,11 @@ bool WHIPOutput::Connect()
 		return false;
 	}
 
-	OBSDataAutoRelease service_settings = obs_service_get_settings(service);
-	if (!service_settings) {
-		obs_output_signal_stop(output, OBS_OUTPUT_ERROR);
-		return false;
-	}
+	endpoint_url = obs_service_get_connect_info(
+			service, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+	bearer_token = obs_service_get_connect_info(
+			service, OBS_SERVICE_CONNECT_INFO_BEARER_TOKEN);
 
-	endpoint_url = obs_service_get_url(service);
-	bearer_token = obs_data_get_string(service_settings, "bearer_token");
 
 	struct curl_slist *headers = NULL;
 	headers = curl_slist_append(headers, "Content-Type: application/sdp");
@@ -453,6 +450,7 @@ void register_whip_output()
 
 	info.id = "whip_output";
 	info.flags = OBS_OUTPUT_AV | OBS_OUTPUT_ENCODED | OBS_OUTPUT_SERVICE;
+	info.protocols = "WebRTC";
 	info.get_name = [](void *) -> const char * {
 		return obs_module_text("Output.Name");
 	};
