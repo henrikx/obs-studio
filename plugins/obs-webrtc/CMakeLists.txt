@@ -1,6 +1,6 @@
 project(obs-webrtc)
 
-option(ENABLE_WEBRTC "Enable WebRTC Output support" OFF)
+option(ENABLE_WEBRTC "Enable WebRTC Output support" ON)
 
 if(NOT ENABLE_WEBRTC)
   obs_status(DISABLED, "obs-webrtc")
